@@ -188,23 +188,26 @@ jmsTemplate.sendAndReceive(queue, session -> {
 
 ## Mülakat Soruları
 
-**Q: Queue ile Topic farkı?**
-A: Queue — tek tüketici alır, load balance edilir. Topic — tüm subscriber'lar alır, pub-sub model.
+**Q: Queue ile Topic farkı nedir? Ne zaman hangisi kullanılır?**
+A: Queue (Point-to-Point): Mesaj tek bir consumer'a gider — birden fazla consumer varsa load balance edilir (yarışır). Sipariş işleme, e-posta gönderimi gibi "bir kez yapılacak işler" için. Topic (Publish-Subscribe): Mesaj tüm subscriber'lara gider — publisher kim dinlediğini bilmez. Event broadcast, audit log, cache invalidation gibi "herkese bildir" senaryoları için. Kafka vs ActiveMQ: Kafka yüksek throughput/replay için, ActiveMQ düşük latency/JMS compliance/transactional messaging için tercih edilir.
 
-**Q: `sessionTransacted=true` ne anlama gelir?**
-A: Consumer exception fırlatırsa mesaj nack'd → broker yeniden iletir. `false`'ta mesaj kaybolabilir.
+**Q: `sessionTransacted=true` ne anlama gelir? At-least-once delivery nasıl sağlanır?**
+A: `sessionTransacted=true`: Consumer bir mesajı aldıktan sonra exception fırlatırsa, JMS session'ı rollback olur, mesaj broker'a iade edilir ve yeniden iletilir (redelivery). `false` (auto-acknowledge): Mesaj alındıktan hemen sonra acknowledge edilir — consumer başarısız olsa bile mesaj kaybolur (at-most-once). At-least-once delivery için: `sessionTransacted=true` + `@JmsListener` metodu exception fırlatsın → broker yeniden iletir. Idempotency: Aynı mesaj birden fazla gelebilir — iş mantığı idempotent olmalı (aynı sipariş ID'si ile iki kez sipariş oluşturma).
 
-**Q: Durable subscription nedir?**
-A: Topic subscriber offline iken gelen mesajlar tutulur. `clientId` + `subscription` adı zorunlu.
+**Q: Durable subscription nedir? Non-durable'dan farkı?**
+A: Durable subscription: Topic subscriber offline iken gelen mesajlar broker tarafından tutulur, subscriber tekrar bağlandığında alır. Gereksinim: `clientId` (bağlantı bazlı unique ID) + `subscriptionName` (abonelik adı) belirlenmeli. Non-durable: Subscriber offline iken gelen mesajlar kaybolur — "fire and forget" yayınlar için. Kullanım: Kritik domain eventleri (sipariş oluşturuldu) → durable; anlık dashboard güncellemeleri → non-durable. ActiveMQ durable topic'leri disk'e yazar, broker restart'ından kurtarır.
 
-**Q: DLQ ne zaman kullanılır?**
-A: Max redelivery aşıldıktan sonra işlenemeyen mesajlar buraya düşer. Operasyonel inceleme + replay için.
+**Q: DLQ (Dead Letter Queue) neden gereklidir? Operasyonel önemi nedir?**
+A: DLQ: Max redelivery sayısına ulaşan (default 6) ve işlenemeyen mesajların düştüğü kuyruk. Neden önemli: Poison message (zararlı mesaj — her denemede exception fırlatır) normal kuyruğu tıkar, diğer mesajlar işlenemez. DLQ sayesinde sorunlu mesaj ayrılır, sağlıklı mesajlar işlenmeye devam eder. Operasyonel pratik: (1) Alert: DLQ dolunca alarm tetikle. (2) İnceleme: Mesaj içeriği ve exception stack trace'i logla/yaz. (3) Replay: Hata düzeltildikten sonra DLQ'dan orijinal kuyruğa tekrar gönder. Spring'de özel DLQ listener yazılabilir.
 
-**Q: JMS Priority nasıl çalışır?**
-A: Broker yüksek öncelikli (5-9) mesajları öne alır. Garantili değil, en iyi çaba prensibi.
+**Q: ActiveMQ vs Kafka temel farkları nelerdir?**
+A: ActiveMQ (JMS broker): Push model — broker mesajı consumer'a iter. Mesaj consumer alınca silinir (queue) veya belirtilen süre tutulur. Priority, durable sub, transactional messaging. Düşük-orta throughput (~10K msg/s), eski enterprise sistemlerle uyum. Kafka (distributed log): Pull model — consumer kendi hızında çeker. Mesajlar retention period boyunca saklanır (replay mümkün). Consumer group offset ile "nerede kaldım" izlenir. Yüksek throughput (milyonlarca msg/s), event sourcing, audit trail. Seçim: Kurumsal JMS uyumu, düşük latency, transactional → ActiveMQ. Big data pipeline, event sourcing, replay, yüksek throughput → Kafka.
 
-**Q: `JMSXDeliveryCount` nedir?**
-A: JMS property — mesajın kaç kez teslim edildiğini tutar. Retry sayacı olarak kullanılır.
+**Q: JMS Priority ile message ordering nasıl çalışır?**
+A: JMS Priority: 0-9 arası (0 en düşük, 9 en yüksek, default 4). Broker yüksek öncelikli mesajları consumer'a önce iletmeye çalışır — garanti değil, best-effort. Ordering: Queue içinde FIFO garantisi vardır (aynı priority). Birden fazla consumer varsa ordering bozulur (paralel tüketim). Ordering gerekiyorsa tek consumer veya message key ile routing. `JMSXDeliveryCount`: Standart JMS property, mesajın kaçıncı teslimat denemesi olduğunu tutar — DLQ'ya düşme kararı için kullanılır (`if (count >= 3) putToDLQ()`).
+
+**Q: Request-Reply pattern JMS'de nasıl uygulanır?**
+A: Producer `JMSReplyTo` header'ına geçici kuyruk (TemporaryQueue) adresi yazar ve `JMSCorrelationID` ile mesajı gönderir. Consumer işleyip sonucu `JMSReplyTo`'daki kuyruğa yazar, aynı `JMSCorrelationID`'yi ekler. Producer geçici kuyruktan sonucu bekler. Spring `JmsTemplate.sendAndReceive()` bunu otomatik yapar. Dezavantaj: Consumer meşgulse producer bloklanır — asenkron sistemlerde zaman aşımı kritik. Kullanım: Anlık hesaplama sonucu beklemek zorunda olan servisler arası RPC.
 
 ---
 
